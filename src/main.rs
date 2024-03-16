@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display, fs::File, io::BufWriter, path::PathBuf};
+use std::{error::Error, fmt::Display, fs::OpenOptions, io::BufWriter, path::PathBuf};
 
 use clap::Parser;
 use image::{io::Reader as ImageReader, DynamicImage, GenericImageView};
@@ -151,7 +151,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if let Some(outfile) = args.outfile {
-        let handle = File::open(outfile)?;
+        let handle = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(outfile)?;
         let writer = BufWriter::new(handle);
         serde_json::to_writer(writer, &lvl)?;
     } else {
