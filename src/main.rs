@@ -107,10 +107,16 @@ fn insert_walls(x: &mut u32, mut y: u32, img: &DynamicImage, walls: &mut Vec<Wal
     if !already_in_list {
         if x_wall == y_wall {
             walls.push(x_wall);
+        } else {
+            if x_wall.start != x_wall.end {
+                walls.push(x_wall);
+            }
+            if y_wall.start != y_wall.end {
+                walls.push(y_wall);
+            }
         }
-        walls.push(y_wall);
-        if x_wall.start != x_wall.end {}
     };
+    dbg!(walls.len());
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
