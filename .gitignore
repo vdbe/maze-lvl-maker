@@ -1,0 +1,14 @@
+# rust
+/target
+
+# nix
+result
+result-*
+
+# pre-commit-hooks.nix
+.pre-commit-config.yaml
+
+# direnv
+.direnv/
+.envrc
+
