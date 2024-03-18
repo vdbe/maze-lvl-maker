@@ -3,6 +3,10 @@ use std::{error::Error, fmt::Display, fs::OpenOptions, io::BufWriter, path::Path
 use clap::Parser;
 use image::{io::Reader as ImageReader, DynamicImage, GenericImageView};
 use serde::Serialize;
+use serde_json::{
+    ser::{CompactFormatter, Formatter, PrettyFormatter},
+    Serializer,
+};
 use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
 
@@ -43,6 +47,9 @@ struct Args {
 
     #[clap(short, long)]
     outfile: Option<PathBuf>,
+
+    #[clap(short, long, default_value = "false")]
+    pretty: bool,
 }
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +67,7 @@ impl Point {
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 struct Wall {
     start: Point,
-    end: Point,
+    end: Option<Point>,
 }
 
 #[derive(Serialize)]
@@ -83,10 +90,10 @@ fn insert_walls(x: &mut u32, mut y: u32, img: &DynamicImage, walls: &mut Vec<Wal
     }
     let x_wall = Wall {
         start,
-        end: Point::new(*x, y),
+        end: (start.x != *x).then_some(Point::new(*x, y)),
     };
 
-    // Check
+    // Check Vertical
     while (y + 1 < img.height())
         && SquareType::from(img.get_pixel(start.x, y + 1).0) == SquareType::Wall
     {
@@ -95,28 +102,31 @@ fn insert_walls(x: &mut u32, mut y: u32, img: &DynamicImage, walls: &mut Vec<Wal
     }
     let y_wall = Wall {
         start,
-        end: Point::new(start.x, y),
+        end: (start.y != y).then_some(Point::new(*x, y)),
     };
 
     let already_in_list = walls.iter().any(|wall| {
         let same_column = wall.start.x == start.x;
-        same_column && start.y >= wall.start.y && y <= wall.end.y
+        let y_start_larger = start.y >= wall.start.y;
+        let y_end_smaller = y_wall.end.is_none()
+            || y_wall
+                .end
+                .is_some_and(|end| wall.end.is_some_and(|w_end| end.y <= w_end.y));
+        same_column && y_start_larger && y_end_smaller
     });
 
-    // if let Some(y_wall) = y_wall &&  {
     if !already_in_list {
         if x_wall == y_wall {
             walls.push(x_wall);
         } else {
-            if x_wall.start != x_wall.end {
+            if x_wall.end.is_some() {
                 walls.push(x_wall);
             }
-            if y_wall.start != y_wall.end {
+            if y_wall.end.is_some() {
                 walls.push(y_wall);
             }
         }
     };
-    dbg!(walls.len());
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -157,16 +167,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if let Some(outfile) = args.outfile {
-        let handle = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(outfile)?;
+        let handle = OpenOptions::new().write(true).create(true).open(outfile)?;
         let writer = BufWriter::new(handle);
-        serde_json::to_writer(writer, &lvl)?;
+        if args.pretty {
+            serde_json::to_writer_pretty(writer, &lvl)?;
+        } else {
+            serde_json::to_writer(writer, &lvl)?;
+        }
     } else {
         let handle = std::io::stdout();
         let writer = BufWriter::new(handle);
-        serde_json::to_writer_pretty(writer, &lvl)?;
+        if args.pretty {
+            serde_json::to_writer_pretty(writer, &lvl)?;
+        } else {
+            serde_json::to_writer(writer, &lvl)?;
+        }
     };
 
     Ok(())
