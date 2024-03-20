@@ -72,6 +72,8 @@ struct Wall {
 
 #[derive(Serialize)]
 struct Lvl {
+    width: u32,
+    height: u32,
     walls: Vec<Wall>,
     start: Point,
     end: Point,
@@ -135,15 +137,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     let args = Args::parse();
+    let img = ImageReader::open(args.image)?.decode()?;
+    info!("Lvl Size {}x{}", img.width(), img.height());
     let mut lvl = Lvl {
+        width: img.width(),
+        height: img.height(),
         walls: Vec::new(),
         start: Point { x: 0, y: 0 },
         end: Point { x: 0, y: 0 },
         checkpoints: Vec::new(),
     };
-
-    let img = ImageReader::open(args.image)?.decode()?;
-    info!("Lvl Size {}x{}", img.width(), img.height());
 
     let mut x;
     let mut y = 0;
