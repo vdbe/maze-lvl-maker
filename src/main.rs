@@ -1,13 +1,9 @@
 use std::{error::Error, fmt::Display, fs::OpenOptions, io::BufWriter, path::PathBuf};
 
 use clap::Parser;
-use image::{io::Reader as ImageReader, DynamicImage, GenericImageView};
+use image::{io::Reader as ImageReader, GenericImageView};
 use serde::Serialize;
-use serde_json::{
-    ser::{CompactFormatter, Formatter, PrettyFormatter},
-    Serializer,
-};
-use tracing::{info, instrument};
+use tracing::debug;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +66,31 @@ struct Wall {
     end: Option<Point>,
 }
 
+impl Wall {
+    fn length(self) -> u32 {
+        if let Some(end) = self.end {
+            (end.x - self.start.x) + (end.y - self.start.y)
+        } else {
+            1
+        }
+    }
+}
+
+impl Ord for Wall {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let self_length = self.length();
+        let other_length = other.length();
+
+        self_length.cmp(&other_length)
+    }
+}
+
+impl PartialOrd for Wall {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 #[derive(Serialize)]
 struct Lvl {
     width: u32,
@@ -80,55 +101,12 @@ struct Lvl {
     checkpoints: Vec<Point>,
 }
 
-#[instrument(skip(img, walls), ret)]
-fn insert_walls(x: &mut u32, mut y: u32, img: &DynamicImage, walls: &mut Vec<Wall>) {
-    let start = Point::new(*x, y);
-
-    // Check horizontal
-    while (*x + 1) < img.width() && SquareType::from(img.get_pixel(*x + 1, y).0) == SquareType::Wall
-    {
-        *x += 1;
-        tracing::info!("Wall detected at: {}-{}", x, y);
-    }
-    let x_wall = Wall {
-        start,
-        end: (start.x != *x).then_some(Point::new(*x, y)),
-    };
-
-    // Check Vertical
-    while (y + 1 < img.height())
-        && SquareType::from(img.get_pixel(start.x, y + 1).0) == SquareType::Wall
-    {
-        y += 1;
-        tracing::info!("Wall detected at: {}-{}", x, y);
-    }
-    let y_wall = Wall {
-        start,
-        end: (start.y != y).then_some(Point::new(*x, y)),
-    };
-
-    let already_in_list = walls.iter().any(|wall| {
-        let same_column = wall.start.x == start.x;
-        let y_start_larger = start.y >= wall.start.y;
-        let y_end_smaller = y_wall.end.is_none()
-            || y_wall
-                .end
-                .is_some_and(|end| wall.end.is_some_and(|w_end| end.y <= w_end.y));
-        same_column && y_start_larger && y_end_smaller
-    });
-
-    if !already_in_list {
-        if x_wall == y_wall {
-            walls.push(x_wall);
-        } else {
-            if x_wall.end.is_some() {
-                walls.push(x_wall);
-            }
-            if y_wall.end.is_some() {
-                walls.push(y_wall);
-            }
-        }
-    };
+#[inline]
+fn check_if_point_is_wall(x: u32, y: u32, walls: &[Wall]) -> bool {
+    walls.iter().any(|wall| {
+        (wall.start.x <= x && x <= wall.end.map_or_else(|| wall.start.x, |end| end.x))
+            && (wall.start.y <= y && y <= wall.end.map_or_else(|| wall.start.y, |end| end.y))
+    })
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -138,7 +116,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let args = Args::parse();
     let img = ImageReader::open(args.image)?.decode()?;
-    info!("Lvl Size {}x{}", img.width(), img.height());
+    debug!("Lvl Size {}x{}", img.width(), img.height());
     let mut lvl = Lvl {
         width: img.width(),
         height: img.height(),
@@ -148,6 +126,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         checkpoints: Vec::new(),
     };
 
+    let mut horizontal_walls = Vec::new();
+
     let mut x;
     let mut y = 0;
     while y < img.height() {
@@ -156,7 +136,20 @@ fn main() -> Result<(), Box<dyn Error>> {
             let pixel = img.get_pixel(x, y);
             match SquareType::from(pixel.0) {
                 SquareType::Wall => {
-                    insert_walls(&mut x, y, &img, &mut lvl.walls);
+                    // Only check for horizontal lines
+                    let start = Point::new(x, y);
+                    while (x + 1) < img.width()
+                        && SquareType::from(img.get_pixel(x + 1, y).0) == SquareType::Wall
+                    {
+                        x += 1;
+                        tracing::trace!("Wall detected at: {}-{}", x, y);
+                    }
+
+                    // Always insert, even if it's a single wall block
+                    horizontal_walls.push(Wall {
+                        start,
+                        end: (start.x != x).then_some(Point::new(x, y)),
+                    })
                 }
                 SquareType::End => lvl.end = Point::new(x, y),
                 SquareType::Checkpoint => lvl.checkpoints.push(Point::new(x, y)),
@@ -168,6 +161,57 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         y += 1;
     }
+
+    // Add vertical walls
+    let mut vertical_walls = Vec::new();
+    x = 0;
+    while x < img.width() {
+        y = 0;
+        while y < img.height() {
+            let pixel = img.get_pixel(x, y);
+            if SquareType::from(pixel.0) == SquareType::Wall {
+                let start = Point::new(x, y);
+
+                while (y + 1) < img.height()
+                    && SquareType::from(img.get_pixel(x, y + 1).0) == SquareType::Wall
+                {
+                    y += 1;
+                    tracing::trace!("Wall detected at: {}-{}", x, y);
+                }
+
+                let wall = Wall {
+                    start,
+                    end: (start.y != y).then_some(Point::new(x, y)),
+                };
+
+                // Only insert none 1 block walls
+                if wall.end.is_some() {
+                    debug!("{:?}", wall);
+                    vertical_walls.push(wall);
+                }
+            }
+
+            y += 1
+        }
+
+        x += 1;
+    }
+
+    // Filter single block horizontal_walls that are in multi block vertical walls
+    let mut walls: Vec<Wall> = horizontal_walls
+        .into_iter()
+        .filter(|h_wall| {
+            h_wall.end.is_some()
+                || !check_if_point_is_wall(h_wall.start.x, h_wall.start.y, &vertical_walls)
+        })
+        .collect();
+
+    walls.append(&mut vertical_walls);
+
+    walls.sort();
+    walls.reverse();
+
+    lvl.walls = walls;
 
     if let Some(outfile) = args.outfile {
         let handle = OpenOptions::new().write(true).create(true).open(outfile)?;
